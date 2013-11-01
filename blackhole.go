@@ -41,7 +41,13 @@ func main() {
 					fmt.Printf("RCPT TO: %s\n", rcpt)
 				}
 
-				io.Copy(os.Stdout, e.Data)
+				_, err := io.Copy(os.Stdout, e.Data)
+				if err != nil {
+					s.Conn.Close()
+					return
+				}
+
+				s.WriteResponse(250, "ok")
 			})}
 		for _, addr := range addrs {
 			wg.Add(1)
