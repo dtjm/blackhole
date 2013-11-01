@@ -4,11 +4,12 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
-	"github.com/bradfitz/go-smtpd/smtpd"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"sendlib/net/smtp"
 	"strings"
 	"sync"
 	"time"
@@ -17,14 +18,6 @@ import (
 var smtpAddrs *string = flag.String("smtp", "", "SMTP adddresses")
 var httpAddrs *string = flag.String("http", "", "HTTP addresses")
 var tcpAddrs *string = flag.String("tcp", "", "Command server addresses")
-
-// Just dump the mail
-func onNewMail(c smtpd.Connection, from smtpd.MailAddress) (env smtpd.Envelope, err error) {
-	log.Printf("%v %v", c.Addr(), from)
-	env = new(smtpd.BasicEnvelope)
-	env.AddRecipient(from)
-	return
-}
 
 func main() {
 	flag.Parse()
@@ -37,21 +30,30 @@ func main() {
 
 	if *smtpAddrs != "" {
 		addrs := strings.Split(*smtpAddrs, ",")
+		server := smtp.Server{
+			Greeting:     "blackhole ready.",
+			ReadTimeout:  30 * time.Second,
+			WriteTimeout: 30 * time.Second,
+			Handler: smtp.HandleFunc(func(e *smtp.Envelope, s *smtp.Session) {
+				fmt.Printf("HELO %s\n", e.Helo)
+				fmt.Printf("MAIL FROM: %s\n", e.MailFrom)
+				for rcpt := range e.Recipients {
+					fmt.Printf("RCPT TO: %s\n", rcpt)
+				}
+
+				io.Copy(os.Stdout, e.Data)
+			})}
 		for _, addr := range addrs {
 			wg.Add(1)
 			log.Printf("Listening on smtp://%s", addr)
 			go func() {
-				server := smtpd.Server{
-					Addr:         addr,
-					Hostname:     "", // use system hostname
-					ReadTimeout:  60 * time.Second,
-					WriteTimeout: 60 * time.Second,
-					PlainAuth:    false,
-					OnNewMail:    onNewMail,
-				}
-				err := server.ListenAndServe()
+				l, err := net.Listen("tcp", addr)
 				if err != nil {
-					log.Fatalf("Failed to start server: %s", err)
+					log.Fatalf("Failed to listen on %s: %s", addr, err)
+				}
+				err = server.Serve(l)
+				if err != nil {
+					log.Fatalf("Failed to serve smtp://%s: %s", addr, err)
 				}
 				wg.Done()
 			}()
